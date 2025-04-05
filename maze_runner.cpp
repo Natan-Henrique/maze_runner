@@ -4,7 +4,7 @@
 #include <stack>
 #include <thread>
 #include <chrono>
-
+#include <mutex>
 // Representação do labirinto
 using Maze = std::vector<std::vector<char>>;
 
@@ -19,6 +19,8 @@ Maze maze;
 int num_rows;
 int num_cols;
 std::stack<Position> valid_positions;
+std::mutex mtx;
+int exit_count = 0;
 
 // Função para carregar o labirinto de um arquivo
 Position load_maze(const std::string& file_name) {
@@ -134,67 +136,88 @@ bool walk(Position pos) {
     //    c. Se walk retornar true, propague o retorno (retorne true)
     // 7. Se todas as posições foram exploradas sem encontrar a saída, retorne false
     // Se já estivermos em 's', retornamos true
+    // Pilha para exploração
     if (maze[pos.row][pos.col] == 's') {
-        return true;
+        exit_count++; // Incrementa o contador de saídas
+        return true; // Se encontrar uma saída, retorna
     }
 
-    // Marca posição atual como 'o' (posição corrente)
     char backup = maze[pos.row][pos.col];
     maze[pos.row][pos.col] = 'o';
 
-    // Imprime o labirinto e aguarda para visualização
     print_maze();
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    // Marca a posição como explorada ('.'), para não revisitar
     maze[pos.row][pos.col] = '.';
 
-    // Se o backup era 's', quer dizer que acabamos de chegar na saída
     if (backup == 's') {
+        exit_count++; // Incrementa o contador de saídas
         return true;
     }
 
-    // Verifica posições adjacentes (cima, baixo, esquerda, direita)
-    // e se forem válidas, empilha
-    // Cima
+    std::vector<std::thread> threads;
+
+    // Verifica as posições adjacentes (cima, baixo, esquerda, direita)
     if (is_valid_position(pos.row - 1, pos.col)) {
+        mtx.lock();
         valid_positions.push({pos.row - 1, pos.col});
+        mtx.unlock();
     }
-    // Baixo
     if (is_valid_position(pos.row + 1, pos.col)) {
+        mtx.lock();
         valid_positions.push({pos.row + 1, pos.col});
+        mtx.unlock();
     }
-    // Esquerda
     if (is_valid_position(pos.row, pos.col - 1)) {
+        mtx.lock();
         valid_positions.push({pos.row, pos.col - 1});
+        mtx.unlock();
     }
-    // Direita
     if (is_valid_position(pos.row, pos.col + 1)) {
+        mtx.lock();
         valid_positions.push({pos.row, pos.col + 1});
+        mtx.unlock();
     }
 
-    //Enquanto houver posições válidas na pilha, exploramos
+    // Enquanto houver posições válidas na pilha, exploramos
     while (!valid_positions.empty()) {
         Position next_pos = valid_positions.top();
         valid_positions.pop();
 
-        if (walk(next_pos)) {
-            return true;
+        // Cria uma nova thread para explorar o próximo caminho
+        threads.push_back(std::thread([next_pos]() {
+            walk(next_pos);
+        }));
+    }
+
+    // Espera todas as threads terminarem antes de retornar
+    for (auto& th : threads) {
+        if (th.joinable()) {
+            th.join();
         }
     }
 
-    //Se esgotarmos todas as posições sem achar 's', retorna false
     return false;
 }
+
+
 int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "Uso: " << argv[0] << " <arquivo_do_labirinto>" << std::endl;
+        return 1;
+    }
+
     Position initial_pos = load_maze(argv[1]);
     if (initial_pos.row == -1 || initial_pos.col == -1) {
         std::cerr << "Posição inicial não encontrada ou erro ao carregar o labirinto." << std::endl;
         return 1;
     }
 
-    bool exit_found = walk(initial_pos);
-    if (exit_found) {
+    // Inicia a exploração do labirinto
+    walk(initial_pos);
+
+    // Se mais de uma saída foi encontrada, imprime "Saída encontrada!"
+    if (exit_count > 0) {
         std::cout << "Saída encontrada!" << std::endl;
     } else {
         std::cout << "Não foi possível encontrar a saída." << std::endl;
